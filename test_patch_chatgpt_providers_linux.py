@@ -17,15 +17,12 @@ class ProviderConfigTests(unittest.TestCase):
     def test_default_provider_config_is_valid(self):
         validate_provider_config(linux.DEFAULT_PROVIDER_CONFIG)
 
-    def test_linux_defaults_include_openrouter_and_ai_flow_models(self):
+    def test_linux_defaults_include_openrouter_models(self):
         config = linux.DEFAULT_PROVIDER_CONFIG
         providers = {item["id"] for item in config["providers"]}
-        self.assertEqual(providers, {"openai", "openrouter", "ai_flow"})
+        self.assertEqual(providers, {"openai", "openrouter"})
         self.assertEqual(config["model_providers"], {
             "openrouter/free": "openrouter",
-            "glm-5.3": "ai_flow",
-            "glm-5.3-flash": "ai_flow",
-            "nex": "ai_flow",
         })
 
     def test_provider_model_metadata_matches_requested_capabilities(self):
@@ -74,7 +71,6 @@ class ProviderConfigTests(unittest.TestCase):
             self.assertEqual(result["default_provider"], "openrouter")
             self.assertEqual(result["providers"][1]["label"], "My Router")
             self.assertEqual(result["model_providers"]["openrouter/free"], "openai")
-            self.assertEqual(result["model_providers"]["glm-5.3"], "ai_flow")
             self.assertEqual(result["model_providers"]["my/model"], "openrouter")
 
     def test_malformed_existing_config_is_rejected_and_preserved(self):
@@ -151,10 +147,9 @@ class CodexConfigurationTests(unittest.TestCase):
             self.assertEqual(json.loads(old_catalog.read_text())["models"][0]["slug"], "my-existing-model")
             generated = json.loads(catalog_path.read_text())
             slugs = {item["slug"] for item in generated["models"]}
-            self.assertTrue({"my-existing-model", "openrouter/free", "glm-5.3", "glm-5.3-flash", "nex"}.issubset(slugs))
+            self.assertTrue({"my-existing-model", "openrouter/free"}.issubset(slugs))
             updated = config.read_text()
             self.assertIn("[model_providers.openrouter]", updated)
-            self.assertIn("[model_providers.ai_flow.auth]", updated)
             self.assertIn(str(catalog_path), updated)
             self.assertEqual(os.stat(catalog_path).st_mode & 0o777, 0o600)
 
