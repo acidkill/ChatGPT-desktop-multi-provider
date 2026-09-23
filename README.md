@@ -10,7 +10,9 @@ The patch:
 - Keeps tasks from all configured providers visible.
 - Keeps the normal ChatGPT login active for OpenAI models.
 
-This project currently supports **macOS only**.
+The original installer supports macOS. A separate Linux installer targets the
+official Linux package and installs a patched **per-user copy**; the minimum
+Linux Codex build is `26.915.31945`.
 
 > [!CAUTION]
 > Changing the provider in a running conversation/thread does **not** work. The conversation/thread continues using the provider it started with.
@@ -26,6 +28,8 @@ This project currently supports **macOS only**.
 - Node.js with `npx`
 
 ## Install
+
+### macOS
 
 <img width="600" src="https://github.com/user-attachments/assets/8800efd1-d490-4bc3-9959-47ddff5a6db8" />
 
@@ -46,7 +50,39 @@ This project currently supports **macOS only**.
 python3 patch_chatgpt_providers.py
 ```
 
-The installer closes processes belonging to the target app, creates a complete backup, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
+### Linux (Omarchy / Arch and other Linux distributions)
+
+Linux installation does not replace the package-managed application. It copies
+the app to `~/.local/opt/chatgpt-provider-patched`, patches and verifies the
+copy, and creates `~/.local/bin/chatgpt-providers` as a separate launcher.
+The launcher keeps command-line arguments and selects Wayland when the session
+uses Wayland, unless an Ozone platform flag was supplied explicitly.
+
+Requirements: the official Linux Codex package at `/usr/lib/chatgpt`, Python
+3.9+, Node.js, and `npx`. The minimum supported build is `26.915.31945`; newer
+numeric builds are accepted when their JavaScript bundles retain the required
+patch anchors. The installer refuses older builds or changed JavaScript
+structures before it replaces the user copy.
+
+```bash
+python3 patch_chatgpt_providers_linux.py --check
+python3 patch_chatgpt_providers_linux.py
+chatgpt-providers
+```
+
+The routing file remains `~/.codex/desktop-model-providers.json` (or the
+effective `CODEX_HOME`). Existing files and credentials are preserved. The
+Linux app reads provider configuration through Codex's app-server file APIs;
+the installer does not copy or store API keys.
+
+After an application package update, run the Linux installer again. It checks
+that the package meets the minimum version and that the expected patch anchors
+still match before replacing the user copy. To return to the package-managed
+app, launch `chatgpt` as usual; the system package and desktop entry are left
+unchanged. The previous user copy is retained at
+`~/.local/opt/chatgpt-provider-patched.previous` when replaced.
+
+The macOS installer closes processes belonging to the target app, creates a complete backup, patches `app.asar`, updates Electron's ASAR integrity metadata, and applies an ad-hoc signature.
 
 Run `python3 patch_chatgpt_providers.py --help` to see alternate app, config, and backup paths.
 
