@@ -61,17 +61,9 @@ DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
             "label": "OpenRouter",
             "description": "OpenRouter free-model router",
         },
-        {
-            "id": "ai_flow",
-            "label": "AI-Flow",
-            "description": "AI-Flow hosted Codex models",
-        },
     ],
     "model_providers": {
         "openrouter/free": "openrouter",
-        "glm-5.3": "ai_flow",
-        "glm-5.3-flash": "ai_flow",
-        "nex": "ai_flow",
     },
 }
 
@@ -80,11 +72,6 @@ CODEX_PROVIDER_CONFIGS = {
         "name": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "account": "openrouter",
-    },
-    "ai_flow": {
-        "name": "AI-Flow",
-        "base_url": "https://litellm.ai-flow.no/v1",
-        "account": "ai-flow",
     },
 }
 
@@ -97,13 +84,9 @@ async __codexLinuxReadProviderConfig() {
     providers: [
       { id: "openai", label: "ChatGPT / OpenAI", description: "Uses your signed-in ChatGPT account" },
       { id: "openrouter", label: "OpenRouter", description: "OpenRouter free-model router" },
-      { id: "ai_flow", label: "AI-Flow", description: "AI-Flow hosted Codex models" },
     ],
     modelProviders: {
       "openrouter/free": "openrouter",
-      "glm-5.3": "ai_flow",
-      "glm-5.3-flash": "ai_flow",
-      "nex": "ai_flow",
     },
   };
   try {
@@ -156,11 +139,9 @@ PICKER_SCRIPT = r'''
       providers: [
         { id: "openai", label: "ChatGPT / OpenAI", description: "Uses your signed-in ChatGPT account" },
         { id: "openrouter", label: "OpenRouter", description: "OpenRouter free-model router" },
-        { id: "ai_flow", label: "AI-Flow", description: "AI-Flow hosted Codex models" },
       ],
       modelProviders: {
-        "openrouter/free": "openrouter", "glm-5.3": "ai_flow",
-        "glm-5.3-flash": "ai_flow", "nex": "ai_flow",
+        "openrouter/free": "openrouter",
       },
     };
     try {
@@ -316,30 +297,6 @@ def provider_models(bundled_catalog: dict[str, Any]) -> list[dict[str, Any]]:
             "description": "OpenRouter free-model router; selects a backing model dynamically. 200K context; text and image input.",
             "context_window": 200_000,
             "max_context_window": 200_000,
-            "input_modalities": ["text", "image"],
-        },
-        {
-            "slug": "glm-5.3",
-            "display_name": "zai/glm-5.3 (AI-Flow)",
-            "description": "AI-Flow model. User-provided metadata: 1M context, text input only.",
-            "context_window": 1_000_000,
-            "max_context_window": 1_000_000,
-            "input_modalities": ["text"],
-        },
-        {
-            "slug": "glm-5.3-flash",
-            "display_name": "zai/glm-5.3-flash (AI-Flow)",
-            "description": "AI-Flow model. User-provided metadata: 1M context, text and image input.",
-            "context_window": 1_000_000,
-            "max_context_window": 1_000_000,
-            "input_modalities": ["text", "image"],
-        },
-        {
-            "slug": "nex",
-            "display_name": "Nex (openai/nex, AI-Flow)",
-            "description": "AI-Flow model. User-provided metadata: 250K context, slow prefill, local only, text and image input.",
-            "context_window": 250_000,
-            "max_context_window": 250_000,
             "input_modalities": ["text", "image"],
         },
     ]
