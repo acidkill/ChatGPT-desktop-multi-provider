@@ -133,9 +133,6 @@ args = ["lookup", "service", "chatgpt-desktop-multi-provider", "provider", "open
 timeout_ms = 5000
 refresh_interval_ms = 0
 ```
-
-AI-Flow uses the same auth fields with `base_url = "https://litellm.ai-flow.no/v1"` and the final `provider` lookup value set to `ai-flow`. On Linux the installer adds these sections automatically when they are missing. On macOS, use the platform's secure credential store and its corresponding auth command instead.
-
 Codex also supports environment-variable authentication with `env_key`. Do not combine `env_key` with a `[model_providers.<id>.auth]` section. For all authentication methods and provider options, see the [Codex custom model provider documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers).
 
 Do not set a global `model_provider` if OpenAI and custom providers should coexist in the desktop app. The patch selects the provider when each new task starts.
