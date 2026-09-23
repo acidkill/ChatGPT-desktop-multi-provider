@@ -9,26 +9,30 @@ packing and marker checks succeed.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
-from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.9/3.10 remain usable for the macOS installer.
+    tomllib = None
 from typing import Any
 
 from patch_chatgpt_providers import (
-    DEFAULT_PROVIDER_CONFIG,
     PatchError,
     atomic_write_json,
     ensure_provider_config,
     run,
     validate_provider_config,
 )
-
 
 MINIMUM_VERSION = "26.915.31945"
 PATCH_MARKER = "__codexDesktopModelProvidersLinuxV1"
@@ -40,6 +44,49 @@ DEFAULT_SOURCE = Path("/usr/lib/chatgpt")
 DEFAULT_INSTALL = Path.home() / ".local/opt/chatgpt-provider-patched"
 DEFAULT_LAUNCHER = Path.home() / ".local/bin/chatgpt-providers"
 DEFAULT_CONFIG = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "desktop-model-providers.json"
+MODEL_CATALOG_NAME = "chatgpt-desktop-multi-provider.json"
+KEYRING_SERVICE = "chatgpt-desktop-multi-provider"
+
+DEFAULT_PROVIDER_CONFIG: dict[str, Any] = {
+    "version": 1,
+    "default_provider": "openai",
+    "providers": [
+        {
+            "id": "openai",
+            "label": "ChatGPT / OpenAI",
+            "description": "Uses your signed-in ChatGPT account",
+        },
+        {
+            "id": "openrouter",
+            "label": "OpenRouter",
+            "description": "OpenRouter free-model router",
+        },
+        {
+            "id": "ai_flow",
+            "label": "AI-Flow",
+            "description": "AI-Flow hosted Codex models",
+        },
+    ],
+    "model_providers": {
+        "openrouter/free": "openrouter",
+        "glm-5.3": "ai_flow",
+        "glm-5.3-flash": "ai_flow",
+        "nex": "ai_flow",
+    },
+}
+
+CODEX_PROVIDER_CONFIGS = {
+    "openrouter": {
+        "name": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "account": "openrouter",
+    },
+    "ai_flow": {
+        "name": "AI-Flow",
+        "base_url": "https://litellm.ai-flow.no/v1",
+        "account": "ai-flow",
+    },
+}
 
 
 CENTRAL_HELPERS = r'''
@@ -49,12 +96,14 @@ async __codexLinuxReadProviderConfig() {
     defaultProvider: "openai",
     providers: [
       { id: "openai", label: "ChatGPT / OpenAI", description: "Uses your signed-in ChatGPT account" },
-      { id: "openrouter", label: "OpenRouter", description: "Uses [model_providers.openrouter] from config.toml" },
+      { id: "openrouter", label: "OpenRouter", description: "OpenRouter free-model router" },
+      { id: "ai_flow", label: "AI-Flow", description: "AI-Flow hosted Codex models" },
     ],
     modelProviders: {
-      "moonshotai/kimi-k3": "openrouter",
-      "x-ai/grok-4.5": "openrouter",
-      "anthropic/claude-fable-5": "openrouter",
+      "openrouter/free": "openrouter",
+      "glm-5.3": "ai_flow",
+      "glm-5.3-flash": "ai_flow",
+      "nex": "ai_flow",
     },
   };
   try {
@@ -106,11 +155,12 @@ PICKER_SCRIPT = r'''
       version: 1, defaultProvider: "openai",
       providers: [
         { id: "openai", label: "ChatGPT / OpenAI", description: "Uses your signed-in ChatGPT account" },
-        { id: "openrouter", label: "OpenRouter", description: "Uses [model_providers.openrouter] from config.toml" },
+        { id: "openrouter", label: "OpenRouter", description: "OpenRouter free-model router" },
+        { id: "ai_flow", label: "AI-Flow", description: "AI-Flow hosted Codex models" },
       ],
       modelProviders: {
-        "moonshotai/kimi-k3": "openrouter", "x-ai/grok-4.5": "openrouter",
-        "anthropic/claude-fable-5": "openrouter",
+        "openrouter/free": "openrouter", "glm-5.3": "ai_flow",
+        "glm-5.3-flash": "ai_flow", "nex": "ai_flow",
       },
     };
     try {
@@ -217,6 +267,201 @@ def require_supported_version(value: str) -> None:
     width = max(len(current), len(minimum))
     if current + (0,) * (width - len(current)) < minimum + (0,) * (width - len(minimum)):
         raise PatchError(f"App version {value} is older than the minimum supported version {MINIMUM_VERSION}")
+
+
+def _atomic_write_text(path: Path, contents: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, mode)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def _catalog_model(template: dict[str, Any], model: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(template)
+    for key in ("model_messages", "base_instructions", "include_skills_usage_instructions",
+                "include_plugin_usage_instructions", "include_apps_usage_instructions"):
+        result.pop(key, None)
+    result.update(model)
+    result["base_instructions"] = (
+        "You are Codex, an AI coding assistant. Follow the user's request, use available tools "
+        "when appropriate, verify your work, and report results accurately. Never reveal secrets."
+    )
+    result["supported_reasoning_levels"] = [
+        {"effort": "low", "description": "Default reasoning supported by the provider"}
+    ]
+    result["default_reasoning_level"] = "low"
+    result["supports_search_tool"] = False
+    result["experimental_supported_tools"] = []
+    result["priority"] = 100
+    return result
+
+
+def provider_models(bundled_catalog: dict[str, Any]) -> list[dict[str, Any]]:
+    models = bundled_catalog.get("models")
+    if not isinstance(models, list) or not models:
+        raise PatchError("Codex bundled model catalog has no models")
+    template = next((item for item in models if item.get("slug") == "gpt-5.6-sol"), models[0])
+    definitions = [
+        {
+            "slug": "openrouter/free",
+            "display_name": "OpenRouter Free Router",
+            "description": "OpenRouter free-model router; selects a backing model dynamically. 200K context; text and image input.",
+            "context_window": 200_000,
+            "max_context_window": 200_000,
+            "input_modalities": ["text", "image"],
+        },
+        {
+            "slug": "glm-5.3",
+            "display_name": "zai/glm-5.3 (AI-Flow)",
+            "description": "AI-Flow model. User-provided metadata: 1M context, text input only.",
+            "context_window": 1_000_000,
+            "max_context_window": 1_000_000,
+            "input_modalities": ["text"],
+        },
+        {
+            "slug": "glm-5.3-flash",
+            "display_name": "zai/glm-5.3-flash (AI-Flow)",
+            "description": "AI-Flow model. User-provided metadata: 1M context, text and image input.",
+            "context_window": 1_000_000,
+            "max_context_window": 1_000_000,
+            "input_modalities": ["text", "image"],
+        },
+        {
+            "slug": "nex",
+            "display_name": "Nex (openai/nex, AI-Flow)",
+            "description": "AI-Flow model. User-provided metadata: 250K context, slow prefill, local only, text and image input.",
+            "context_window": 250_000,
+            "max_context_window": 250_000,
+            "input_modalities": ["text", "image"],
+        },
+    ]
+    return [_catalog_model(template, item) for item in definitions]
+
+
+def _toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _insert_root_setting(contents: str, key: str, value: str) -> str:
+    lines = contents.splitlines(keepends=True)
+    root_end = next((i for i, line in enumerate(lines) if re.match(r"\s*\[\[?[^]]+\]\]?\s*(?:#.*)?$", line)), len(lines))
+    setting = f"{key} = {_toml_string(value)}\n"
+    for index, line in enumerate(lines[:root_end]):
+        if re.match(rf"\s*{re.escape(key)}\s*=", line):
+            right_hand_side = line.split("=", 1)[1].strip()
+            if right_hand_side.startswith(('"""', "'''")):
+                raise PatchError(f"Cannot safely update multiline TOML setting {key}")
+            comment = ""
+            if "#" in line:
+                comment = "  #" + line.split("#", 1)[1].rstrip("\r\n")
+            lines[index] = setting.rstrip("\n") + comment + "\n"
+            return "".join(lines)
+    if root_end and lines[root_end - 1].strip():
+        lines.insert(root_end, "\n")
+        root_end += 1
+    lines.insert(root_end, setting)
+    return "".join(lines)
+
+
+def configure_codex(source: Path, codex_home: Path) -> tuple[Path, Path]:
+    if tomllib is None:
+        raise PatchError("Python 3.11 or newer is required to safely configure Codex TOML")
+    secret_tool = shutil.which("secret-tool")
+    if secret_tool is None:
+        raise PatchError("secret-tool is required to configure GNOME Keyring authentication")
+    codex_binary = source / "resources" / "codex"
+    if not codex_binary.is_file() or not os.access(codex_binary, os.X_OK):
+        codex_binary = Path(shutil.which("codex") or "")
+    if not codex_binary.is_file():
+        raise PatchError("Cannot find the Codex CLI to read its bundled model catalog")
+
+    config_path = codex_home / "config.toml"
+    try:
+        config_text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+        config_data = tomllib.loads(config_text)
+    except (OSError, ValueError) as exc:
+        raise PatchError(f"Cannot safely read Codex configuration {config_path}: {exc}") from exc
+
+    catalog_path = codex_home / "model-catalogs" / MODEL_CATALOG_NAME
+    old_catalog_value = config_data.get("model_catalog_json")
+    if "model_catalog_json" in config_data and not isinstance(old_catalog_value, str):
+        raise PatchError("Codex model_catalog_json must be a string path")
+    existing_models: list[dict[str, Any]] = []
+    if isinstance(old_catalog_value, str):
+        old_catalog_path = Path(old_catalog_value).expanduser()
+        if not old_catalog_path.is_absolute():
+            old_catalog_path = codex_home / old_catalog_path
+        try:
+            old_catalog = json.loads(old_catalog_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            old_catalog = {"models": []}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise PatchError(f"Cannot read existing model catalog {old_catalog_path}: {exc}") from exc
+        if not isinstance(old_catalog, dict) or not isinstance(old_catalog.get("models"), list):
+            raise PatchError(f"Existing model catalog has an invalid shape: {old_catalog_path}")
+        if any(not isinstance(item, dict) or not isinstance(item.get("slug"), str) for item in old_catalog["models"]):
+            raise PatchError(f"Existing model catalog contains an invalid model: {old_catalog_path}")
+        existing_models = old_catalog["models"]
+
+    try:
+        result = subprocess.run(
+            [str(codex_binary), "debug", "models", "--bundled"],
+            check=True, capture_output=True, text=True,
+        )
+        catalog = json.loads(result.stdout)
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        raise PatchError(f"Cannot load bundled Codex model catalog: {exc}") from exc
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("models"), list):
+        raise PatchError("Codex bundled model catalog has an invalid shape")
+
+    merged: dict[str, dict[str, Any]] = {}
+    for item in catalog["models"] + existing_models:
+        if isinstance(item, dict) and isinstance(item.get("slug"), str):
+            merged[item["slug"]] = item
+    for item in provider_models(catalog):
+        merged[item["slug"]] = item
+    catalog["models"] = list(merged.values())
+
+    provider_tables = config_data.get("model_providers", {})
+    if not isinstance(provider_tables, dict):
+        raise PatchError("Codex model_providers configuration must be a TOML table")
+    additions = []
+    for provider_id, details in CODEX_PROVIDER_CONFIGS.items():
+        if provider_id in provider_tables:
+            continue
+        account = details["account"]
+        additions.append(
+            f"[model_providers.{provider_id}]\n"
+            f"name = {_toml_string(details['name'])}\n"
+            f"base_url = {_toml_string(details['base_url'])}\n"
+            "wire_api = \"responses\"\n\n"
+            f"[model_providers.{provider_id}.auth]\n"
+            f"command = {_toml_string(secret_tool)}\n"
+            f"args = [\"lookup\", \"service\", {_toml_string(KEYRING_SERVICE)}, \"provider\", {_toml_string(account)}]\n"
+            "timeout_ms = 5000\n"
+            "refresh_interval_ms = 0\n"
+        )
+    if additions:
+        if config_text and not config_text.endswith("\n"):
+            config_text += "\n"
+        config_text += "\n" + "\n".join(additions)
+    config_text = _insert_root_setting(config_text, "model_catalog_json", str(catalog_path))
+    try:
+        tomllib.loads(config_text)
+    except ValueError as exc:
+        raise PatchError(f"Generated Codex configuration is invalid TOML: {exc}") from exc
+
+    atomic_write_json(catalog_path, catalog)
+    _atomic_write_text(config_path, config_text)
+    return config_path, catalog_path
 
 
 def locate_bundles(extracted: Path) -> tuple[Path, Path]:
@@ -348,8 +593,14 @@ def run_installer(source: Path, install_dir: Path, launcher: Path, config: Path,
             print(f"Compatible Linux app: {version}; bundles: {central.name}, {picker.name}")
             return
 
-        source_config_state = ensure_provider_config(config, overwrite=False)
+        source_config_state = ensure_provider_config(
+            config, overwrite=False, default_config=DEFAULT_PROVIDER_CONFIG,
+            merge_defaults=True,
+        )
         print(f"Provider configuration {source_config_state}: {config}")
+        codex_config_path, model_catalog_path = configure_codex(source, config.parent)
+        print(f"Codex provider and model catalog configuration: {codex_config_path}")
+        print(f"Codex model catalog: {model_catalog_path}")
         install_dir.parent.mkdir(parents=True, exist_ok=True)
         stage = install_dir.parent / f".{install_dir.name}.staging-{os.getpid()}"
         old_copy = install_dir.parent / f"{install_dir.name}.previous"

@@ -59,7 +59,7 @@ The launcher keeps command-line arguments and selects Wayland when the session
 uses Wayland, unless an Ozone platform flag was supplied explicitly.
 
 Requirements: the official Linux Codex package at `/usr/lib/chatgpt`, Python
-3.9+, Node.js, and `npx`. The minimum supported build is `26.915.31945`; newer
+3.11+, Node.js, `npx`, and GNOME Keyring's `secret-tool`. The minimum supported build is `26.915.31945`; newer
 numeric builds are accepted when their JavaScript bundles retain the required
 patch anchors. The installer refuses older builds or changed JavaScript
 structures before it replaces the user copy.
@@ -70,10 +70,55 @@ python3 patch_chatgpt_providers_linux.py
 chatgpt-providers
 ```
 
-The routing file remains `~/.codex/desktop-model-providers.json` (or the
-effective `CODEX_HOME`). Existing files and credentials are preserved. The
-Linux app reads provider configuration through Codex's app-server file APIs;
-the installer does not copy or store API keys.
+The installer creates `~/.codex/desktop-model-providers.json` (or uses the
+effective `CODEX_HOME`) when it is absent; if it already exists, it adds only
+missing providers and model mappings. Existing defaults, labels and mappings
+are preserved. It also adds missing OpenRouter and
+AI-Flow provider sections to `config.toml`, then builds a complete model catalog
+from the Codex binary shipped in the Linux package. Existing provider sections,
+catalog models and credentials are preserved. The generated catalog is stored
+at `~/.codex/model-catalogs/chatgpt-desktop-multi-provider.json` and selected
+through `model_catalog_json`.
+
+The model list contains:
+
+| Provider | API model ID (catalog slug) | Display name | Context and input modalities |
+| --- | --- | --- | --- |
+| OpenRouter | `openrouter/free` | OpenRouter Free Router | 200K; text and image |
+| AI-Flow | `glm-5.3` | `zai/glm-5.3 (AI-Flow)` | 1M; text only |
+| AI-Flow | `glm-5.3-flash` | `zai/glm-5.3-flash (AI-Flow)` | 1M; text and image |
+| AI-Flow | `nex` | `Nex (openai/nex, AI-Flow)` | 250K; text and image; slow prefill; local only |
+
+AI-Flow's API accepts the unprefixed slugs shown above. The requested `zai/`
+and `openai/` forms receive HTTP 403 from that endpoint. AI-Flow context sizes
+and the Nex notes are user-provided metadata; endpoint smoke tests verified
+text responses and image input, not those metadata claims. OpenRouter's free
+router may select a different backing model between requests.
+
+The custom providers read their bearer tokens from GNOME Keyring using
+`secret-tool`. Create new API keys before setup: the previous values were
+exposed in a local diagnostic output. Store each new key without adding it to
+shell history:
+
+```bash
+read -r -s -p "New OpenRouter API key: " api_key; printf '\n'
+printf '%s' "$api_key" | secret-tool store --label="Codex OpenRouter" service chatgpt-desktop-multi-provider provider openrouter
+unset api_key
+
+read -r -s -p "New AI-Flow API key: " api_key; printf '\n'
+printf '%s' "$api_key" | secret-tool store --label="Codex AI-Flow" service chatgpt-desktop-multi-provider provider ai-flow
+unset api_key
+```
+
+After verifying the Keyring entries, remove the old `OPENROUTER_API_KEY` and
+`LITELLM_API_KEY` exports from `~/.bashrc`; that file should not contain the
+rotated keys. Do not put API keys in `config.toml`, the routing JSON, or the
+model catalog.
+
+The Codex configuration uses `wire_api = "responses"` and a `secret-tool
+lookup` auth command for each provider. Inspect the effective catalog with
+`/usr/lib/chatgpt/resources/codex debug models` and restart the patched app
+after installation or catalog changes.
 
 After an application package update, run the Linux installer again. It checks
 that the package meets the minimum version and that the expected patch anchors
@@ -99,17 +144,13 @@ base_url = "https://openrouter.ai/api/v1"
 wire_api = "responses"
 
 [model_providers.openrouter.auth]
-command = "/usr/bin/security"
-args = ["find-generic-password", "-a", "YOUR_MACOS_USERNAME", "-s", "Codex OpenRouter API Key", "-w"]
+command = "/usr/bin/secret-tool"
+args = ["lookup", "service", "chatgpt-desktop-multi-provider", "provider", "openrouter"]
 timeout_ms = 5000
 refresh_interval_ms = 0
 ```
 
-Replace `YOUR_MACOS_USERNAME`, then add or update the API key in macOS Keychain. The command prompts for the key instead of placing it in shell history:
-
-```bash
-security add-generic-password -U -a "$USER" -s "Codex OpenRouter API Key" -w
-```
+AI-Flow uses the same auth fields with `base_url = "https://litellm.ai-flow.no/v1"` and the final `provider` lookup value set to `ai-flow`. On Linux the installer adds these sections automatically when they are missing. On macOS, use the platform's secure credential store and its corresponding auth command instead.
 
 Codex also supports environment-variable authentication with `env_key`. Do not combine `env_key` with a `[model_providers.<id>.auth]` section. For all authentication methods and provider options, see the [Codex custom model provider documentation](https://learn.chatgpt.com/docs/config-file/config-advanced#custom-model-providers).
 
@@ -152,7 +193,7 @@ Use `codex debug models` to inspect the effective catalog Codex sees.
 
 ## Configure the patched provider menu
 
-The installer creates:
+The Linux installer creates:
 
 ```text
 ~/.codex/desktop-model-providers.json
@@ -173,13 +214,19 @@ Example:
     {
       "id": "openrouter",
       "label": "OpenRouter",
-      "description": "Uses [model_providers.openrouter] from config.toml"
+      "description": "OpenRouter free-model router"
+    },
+    {
+      "id": "ai_flow",
+      "label": "AI-Flow",
+      "description": "AI-Flow hosted Codex models"
     }
   ],
   "model_providers": {
-    "moonshotai/kimi-k3": "openrouter",
-    "x-ai/grok-4.5": "openrouter",
-    "anthropic/claude-fable-5": "openrouter"
+    "openrouter/free": "openrouter",
+    "glm-5.3": "ai_flow",
+    "glm-5.3-flash": "ai_flow",
+    "nex": "ai_flow"
   }
 }
 ```

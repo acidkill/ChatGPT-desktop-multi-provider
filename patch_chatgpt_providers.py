@@ -13,7 +13,6 @@ import datetime as dt
 import hashlib
 import json
 import os
-from pathlib import Path
 import plistlib
 import pwd
 import re
@@ -26,8 +25,8 @@ import sys
 import tempfile
 import textwrap
 import time
+from pathlib import Path
 from typing import Any, NoReturn
-
 
 PATCH_MARKER = b"__codexDesktopModelProvidersPatchV3"
 LEGACY_PATCH_MARKER = b"__codexDesktopModelProvidersPatchV2"
@@ -1369,10 +1368,15 @@ def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
             temporary_path.unlink()
 
 
-def ensure_provider_config(path: Path, overwrite: bool) -> str:
+def ensure_provider_config(
+    path: Path,
+    overwrite: bool,
+    default_config: dict[str, Any] = DEFAULT_PROVIDER_CONFIG,
+    merge_defaults: bool = False,
+) -> str:
     if overwrite or not path.exists() or path.stat().st_size == 0:
-        validate_provider_config(DEFAULT_PROVIDER_CONFIG)
-        atomic_write_json(path, DEFAULT_PROVIDER_CONFIG)
+        validate_provider_config(default_config)
+        atomic_write_json(path, default_config)
         return "written"
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -1380,6 +1384,19 @@ def ensure_provider_config(path: Path, overwrite: bool) -> str:
     except (OSError, json.JSONDecodeError) as exc:
         raise PatchError(f"Cannot read valid JSON from {path}: {exc}") from exc
     validate_provider_config(data)
+    if merge_defaults:
+        original = json.dumps(data, sort_keys=True)
+        provider_ids = {provider["id"] for provider in data["providers"]}
+        for provider in default_config["providers"]:
+            if provider["id"] not in provider_ids:
+                data["providers"].append(provider)
+                provider_ids.add(provider["id"])
+        for model, provider_id in default_config["model_providers"].items():
+            data["model_providers"].setdefault(model, provider_id)
+        validate_provider_config(data)
+        if json.dumps(data, sort_keys=True) != original:
+            atomic_write_json(path, data)
+            return "merged"
     return "kept"
 
 
