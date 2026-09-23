@@ -85,33 +85,17 @@ The model list contains:
 | Provider | API model ID (catalog slug) | Display name | Context and input modalities |
 | --- | --- | --- | --- |
 | OpenRouter | `openrouter/free` | OpenRouter Free Router | 200K; text and image |
-| AI-Flow | `glm-5.3` | `zai/glm-5.3 (AI-Flow)` | 1M; text only |
-| AI-Flow | `glm-5.3-flash` | `zai/glm-5.3-flash (AI-Flow)` | 1M; text and image |
-| AI-Flow | `nex` | `Nex (openai/nex, AI-Flow)` | 250K; text and image; slow prefill; local only |
-
-AI-Flow's API accepts the unprefixed slugs shown above. The requested `zai/`
-and `openai/` forms receive HTTP 403 from that endpoint. AI-Flow context sizes
-and the Nex notes are user-provided metadata; endpoint smoke tests verified
-text responses and image input, not those metadata claims. OpenRouter's free
-router may select a different backing model between requests.
 
 The custom providers read their bearer tokens from GNOME Keyring using
-`secret-tool`. Create new API keys before setup: the previous values were
-exposed in a local diagnostic output. Store each new key without adding it to
-shell history:
+`secret-tool`. Create new API keys before setup
 
 ```bash
 read -r -s -p "New OpenRouter API key: " api_key; printf '\n'
 printf '%s' "$api_key" | secret-tool store --label="Codex OpenRouter" service chatgpt-desktop-multi-provider provider openrouter
 unset api_key
-
-read -r -s -p "New AI-Flow API key: " api_key; printf '\n'
-printf '%s' "$api_key" | secret-tool store --label="Codex AI-Flow" service chatgpt-desktop-multi-provider provider ai-flow
-unset api_key
 ```
 
-After verifying the Keyring entries, remove the old `OPENROUTER_API_KEY` and
-`LITELLM_API_KEY` exports from `~/.bashrc`; that file should not contain the
+After verifying the Keyring entries, remove the old `OPENROUTER_API_KEY` exports from `~/.bashrc`; that file should not contain the
 rotated keys. Do not put API keys in `config.toml`, the routing JSON, or the
 model catalog.
 
@@ -215,18 +199,10 @@ Example:
       "id": "openrouter",
       "label": "OpenRouter",
       "description": "OpenRouter free-model router"
-    },
-    {
-      "id": "ai_flow",
-      "label": "AI-Flow",
-      "description": "AI-Flow hosted Codex models"
     }
   ],
   "model_providers": {
-    "openrouter/free": "openrouter",
-    "glm-5.3": "ai_flow",
-    "glm-5.3-flash": "ai_flow",
-    "nex": "ai_flow"
+    "openrouter/free": "openrouter"
   }
 }
 ```
